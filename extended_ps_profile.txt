@@ -1,0 +1,418 @@
+# =============================================================================
+# Linux-like PowerShell Profile
+# =============================================================================
+
+# --- Basic Navigation & File Operations ---
+Set-Alias -Name pwd -Value Get-Location
+Set-Alias -Name ls -Value Get-ChildItem
+Set-Alias -Name ll -Value Get-ChildItem
+Set-Alias -Name la -Value 'Get-ChildItem -Force'
+Set-Alias -Name cat -Value Get-Content
+Set-Alias -Name clear -Value Clear-Host
+Set-Alias -Name cls -Value Clear-Host
+
+# Enhanced ls with colors and formatting
+function ls {
+    param([string[]]$Path = ".", [switch]$l, [switch]$a, [switch]$la, [switch]$h)
+    
+    $params = @{ Path = $Path }
+    if ($a -or $la) { $params.Force = $true }
+    
+    $items = Get-ChildItem @params
+    
+    if ($l -or $la) {
+        $items | Format-Table Mode, LastWriteTime, Length, Name -AutoSize
+    } elseif ($h) {
+        $items | Select-Object Mode, @{N='Size';E={
+            if ($_.PSIsContainer) { "<DIR>" }
+            elseif ($_.Length -gt 1GB) { "{0:N2} GB" -f ($_.Length / 1GB) }
+            elseif ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) }
+            elseif ($_.Length -gt 1KB) { "{0:N2} KB" -f ($_.Length / 1KB) }
+            else { "{0} B" -f $_.Length }
+        }}, Name | Format-Table -AutoSize
+    } else {
+        $items | Format-Wide -Column 4
+    }
+}
+
+# --- File Operations with Linux-style flags ---
+function cp {
+    [CmdletBinding()]
+    param(
+        [Alias('r')][switch]$Recurse,
+        [Alias('f')][switch]$Force,
+        [Parameter(ValueFromRemainingArguments=$true)]
+        [string[]]$Arguments
+    )
+    
+    if ($Arguments.Count -lt 2) {
+        Write-Error "cp: missing file operand"
+        return
+    }
+    
+    $source = $Arguments[0..($Arguments.Count-2)]
+    $destination = $Arguments[-1]
+    
+    Copy-Item -Path $source -Destination $destination -Recurse:$Recurse -Force:$Force
+}
+
+function mv {
+    [CmdletBinding()]
+    param(
+        [Alias('f')][switch]$Force,
+        [Parameter(ValueFromRemainingArguments=$true)]
+        [string[]]$Arguments
+    )
+    
+    if ($Arguments.Count -lt 2) {
+        Write-Error "mv: missing file operand"
+        return
+    }
+    
+    $source = $Arguments[0..($Arguments.Count-2)]
+    $destination = $Arguments[-1]
+    
+    Move-Item -Path $source -Destination $destination -Force:$Force
+}
+
+function rm {
+    [CmdletBinding()]
+    param(
+        [Alias('r')][switch]$Recurse,
+        [Alias('f')][switch]$Force,
+        [switch]$rf,
+        [Parameter(ValueFromRemainingArguments=$true)]
+        [string[]]$Path
+    )
+    
+    if (-not $Path) {
+        Write-Error "rm: missing operand"
+        return
+    }
+    
+    # Handle combined -rf flag
+    if ($rf) {
+        $Recurse = $true
+        $Force = $true
+    }
+    
+    Remove-Item -Path $Path -Recurse:$Recurse -Force:$Force
+}
+
+function mkdir {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Path)
+    foreach ($p in $Path) {
+        New-Item -ItemType Directory -Path $p -Force | Out-Null
+    }
+}
+
+function touch {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Path)
+    foreach ($p in $Path) {
+        if (Test-Path $p) {
+            (Get-Item $p).LastWriteTime = Get-Date
+        } else {
+            New-Item -ItemType File -Path $p -Force | Out-Null
+        }
+    }
+}
+
+# --- Text Processing ---
+function grep {
+    param(
+        [Parameter(Position=0, Mandatory=$true)][string]$Pattern,
+        [Parameter(ValueFromRemainingArguments=$true)][string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)][string[]]$InputObject,
+        [Alias('i')][switch]$IgnoreCase,
+        [Alias('v')][switch]$NotMatch,
+        [Alias('n')][switch]$LineNumber,
+        [Alias('r')][switch]$Recurse
+    )
+    
+    process {
+        $params = @{ Pattern = $Pattern }
+        if ($IgnoreCase) { $params.CaseSensitive = $false }
+        if ($NotMatch) { $params.NotMatch = $true }
+        if ($LineNumber) { $params.IncludeLineNumber = $true }
+        
+        if ($InputObject) {
+            $InputObject | Select-String @params
+        } elseif ($Path) {
+            if ($Recurse) {
+                Get-ChildItem -Path $Path -Recurse -File | Select-String @params
+            } else {
+                Select-String @params -Path $Path
+            }
+        } else {
+            $input | Select-String @params
+        }
+    }
+}
+
+function head {
+    param(
+        [Parameter(Position=0)][int]$n = 10,
+        [Parameter(ValueFromRemainingArguments=$true)][string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)][string[]]$InputObject
+    )
+    
+    process {
+        if ($InputObject) {
+            $InputObject | Select-Object -First $n
+        } elseif ($Path) {
+            Get-Content -Path $Path -TotalCount $n
+        } else {
+            $input | Select-Object -First $n
+        }
+    }
+}
+
+function tail {
+    param(
+        [Parameter(Position=0)][int]$n = 10,
+        [Parameter(ValueFromRemainingArguments=$true)][string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)][string[]]$InputObject,
+        [Alias('f')][switch]$Follow
+    )
+    
+    process {
+        if ($InputObject) {
+            $InputObject | Select-Object -Last $n
+        } elseif ($Path) {
+            if ($Follow) {
+                Get-Content -Path $Path -Tail $n -Wait
+            } else {
+                Get-Content -Path $Path -Tail $n
+            }
+        } else {
+            $input | Select-Object -Last $n
+        }
+    }
+}
+
+function wc {
+    param(
+        [Parameter(ValueFromPipeline=$true)][string[]]$InputObject,
+        [Parameter(ValueFromRemainingArguments=$true)][string[]]$Path,
+        [Alias('l')][switch]$Lines,
+        [Alias('w')][switch]$Words,
+        [Alias('c')][switch]$Characters
+    )
+    
+    process {
+        $content = if ($InputObject) { $InputObject } elseif ($Path) { Get-Content $Path } else { $input }
+        
+        if (-not ($Lines -or $Words -or $Characters)) {
+            # Default: show all counts
+            $lineCount = ($content | Measure-Object -Line).Lines
+            $wordCount = ($content | Measure-Object -Word).Words
+            $charCount = ($content | Measure-Object -Character).Characters
+            "$lineCount $wordCount $charCount"
+        } else {
+            $result = @()
+            if ($Lines) { $result += ($content | Measure-Object -Line).Lines }
+            if ($Words) { $result += ($content | Measure-Object -Word).Words }
+            if ($Characters) { $result += ($content | Measure-Object -Character).Characters }
+            $result -join " "
+        }
+    }
+}
+
+# --- System Information ---
+function ps {
+    param([string]$Name = "*")
+    Get-Process -Name $Name | Sort-Object CPU -Descending
+}
+
+function top {
+    param([int]$Count = 15)
+    Get-Process | Sort-Object CPU -Descending | Select-Object -First $Count Id, ProcessName, CPU, WorkingSet, VirtualMemorySize
+}
+
+function df {
+    Get-WmiObject -Class Win32_LogicalDisk | Select-Object DeviceID, 
+        @{N='Size(GB)';E={[math]::Round($_.Size/1GB,2)}},
+        @{N='Used(GB)';E={[math]::Round(($_.Size-$_.FreeSpace)/1GB,2)}},
+        @{N='Free(GB)';E={[math]::Round($_.FreeSpace/1GB,2)}},
+        @{N='Use%';E={[math]::Round((($_.Size-$_.FreeSpace)/$_.Size)*100,1)}}
+}
+
+function free {
+    $os = Get-WmiObject -Class Win32_OperatingSystem
+    $totalMem = [math]::Round($os.TotalVisibleMemorySize/1MB, 2)
+    $freeMem = [math]::Round($os.FreePhysicalMemory/1MB, 2)
+    $usedMem = $totalMem - $freeMem
+    
+    Write-Output "Memory Usage:"
+    Write-Output "Total: $totalMem GB"
+    Write-Output "Used:  $usedMem GB"
+    Write-Output "Free:  $freeMem GB"
+}
+
+function uptime {
+    $bootTime = (Get-CimInstance -ClassName win32_operatingsystem).LastBootUpTime
+    $uptime = (Get-Date) - $bootTime
+    "System uptime: $($uptime.Days) days, $($uptime.Hours) hours, $($uptime.Minutes) minutes"
+}
+
+# --- Utilities ---
+function which {
+    param([Parameter(Mandatory=$true)][string]$Command)
+    Get-Command $Command -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+}
+
+function whereis {
+    param([Parameter(Mandatory=$true)][string]$Command)
+    Get-Command $Command -All -ErrorAction SilentlyContinue
+}
+
+function less {
+    param([Parameter(ValueFromPipeline=$true)]$InputObject)
+    
+    process {
+        if ($InputObject) {
+            $InputObject | Out-Host -Paging
+        } else {
+            $input | Out-Host -Paging
+        }
+    }
+}
+
+function more {
+    param([Parameter(ValueFromPipeline=$true)]$InputObject)
+    process { if ($InputObject) { $InputObject | Out-Host -Paging } else { $input | Out-Host -Paging } }
+}
+
+function sudo {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Command)
+    
+    if ($Command) {
+        $cmd = $Command -join ' '
+        Start-Process powershell -Verb RunAs -ArgumentList "-NoExit", "-Command", $cmd
+    } else {
+        Start-Process powershell -Verb RunAs
+    }
+}
+
+function su {
+    Start-Process powershell -Verb RunAs
+}
+
+# --- Network ---
+function ping {
+    param(
+        [Parameter(Mandatory=$true)][string]$ComputerName,
+        [int]$Count = 4
+    )
+    Test-Connection -ComputerName $ComputerName -Count $Count
+}
+
+function wget {
+    param(
+        [Parameter(Mandatory=$true)][string]$Uri,
+        [string]$OutFile
+    )
+    if ($OutFile) {
+        Invoke-WebRequest -Uri $Uri -OutFile $OutFile
+    } else {
+        Invoke-WebRequest -Uri $Uri
+    }
+}
+
+function curl {
+    param([Parameter(Mandatory=$true)][string]$Uri)
+    Invoke-RestMethod -Uri $Uri
+}
+
+# --- History and Search ---
+function history {
+    param([int]$Count = 50)
+    Get-History | Select-Object -Last $Count
+}
+
+Set-Alias -Name h -Value history
+
+# --- Enhanced CD with history ---
+$global:DirStack = @()
+function cd {
+    param([string]$Path = "~")
+    
+    if ($Path -eq "-") {
+        if ($global:DirStack.Count -gt 0) {
+            $prevDir = $global:DirStack[-1]
+            $global:DirStack = $global:DirStack[0..($global:DirStack.Count-2)]
+            Set-Location $prevDir
+        } else {
+            Write-Warning "No previous directory"
+        }
+    } else {
+        $global:DirStack += (Get-Location).Path
+        Set-Location $Path
+    }
+}
+
+function pushd {
+    param([string]$Path)
+    Push-Location $Path
+}
+
+function popd {
+    Pop-Location
+}
+
+# --- Git shortcuts (if git is available) ---
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    Set-Alias -Name g -Value git
+    function gst { git status }
+    function ga { git add $args }
+    function gc { git commit $args }
+    function gp { git push $args }
+    function gl { git log --oneline -10 }
+    function gd { git diff $args }
+    function gb { git branch $args }
+    function gco { git checkout $args }
+}
+
+# --- Prompt Enhancement ---
+function prompt {
+    $currentPath = $executionContext.SessionState.Path.CurrentLocation.Path
+    $shortPath = if ($currentPath.Length -gt 50) {
+        "..." + $currentPath.Substring($currentPath.Length - 47)
+    } else {
+        $currentPath
+    }
+    
+    $gitBranch = ""
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $branch = git branch --show-current 2>$null
+        if ($branch) {
+            $gitBranch = " ($branch)"
+        }
+    }
+    
+    Write-Host "$env:USERNAME@$env:COMPUTERNAME" -ForegroundColor Green -NoNewline
+    Write-Host ":" -NoNewline
+    Write-Host $shortPath -ForegroundColor Blue -NoNewline
+    Write-Host $gitBranch -ForegroundColor Yellow -NoNewline
+    Write-Host "$ " -NoNewline
+    
+    return " "
+}
+
+# --- PowerShell Enhancement ---
+# Vi-style editing (comment out if you prefer Emacs style)
+Set-PSReadLineOption -EditMode Vi
+
+# Better tab completion
+Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
+
+# History search
+Set-PSReadLineKeyHandler -Key UpArrow -Function HistorySearchBackward
+Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
+
+# --- Useful variables ---
+$env:EDITOR = "notepad"  # Change to your preferred editor
+
+# --- Welcome message ---
+Write-Host "Linux-like PowerShell Profile Loaded!" -ForegroundColor Green
+Write-Host "Type 'Get-Alias' to see all available aliases" -ForegroundColor Cyan

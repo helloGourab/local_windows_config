@@ -1,0 +1,151 @@
+# =============================================================================
+# Linux-like PowerShell Profile (cleaned up)
+# =============================================================================
+
+# --- Basic Aliases ---
+Set-Alias pwd Get-Location
+Set-Alias cat Get-Content
+Set-Alias cls Clear-Host
+Set-Alias clear Clear-Host
+Set-Alias ll Get-ChildItem
+
+# --- cp & mv ---
+function cp {
+    [CmdletBinding()]
+    param(
+        [Alias('r')][switch]$Recurse,
+        [Alias('f')][switch]$Force,
+        [Parameter(ValueFromRemainingArguments=$true)]
+        [string[]]$Arguments
+    )
+    
+    if ($Arguments.Count -lt 2) {
+        Write-Error "cp: missing file operand"
+        return
+    }
+    
+    $source = $Arguments[0..($Arguments.Count-2)]
+    $destination = $Arguments[-1]
+    
+    Copy-Item -Path $source -Destination $destination -Recurse:$Recurse -Force:$Force
+}
+
+function mv {
+    [CmdletBinding()]
+    param(
+        [Alias('f')][switch]$Force,
+        [Parameter(ValueFromRemainingArguments=$true)]
+        [string[]]$Arguments
+    )
+    
+    if ($Arguments.Count -lt 2) {
+        Write-Error "mv: missing file operand"
+        return
+    }
+    
+    $source = $Arguments[0..($Arguments.Count-2)]
+    $destination = $Arguments[-1]
+    
+    Move-Item -Path $source -Destination $destination -Force:$Force
+}
+
+# --- touch ---
+function touch {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Path)
+    foreach ($p in $Path) {
+        if (Test-Path $p) {
+            (Get-Item $p).LastWriteTime = Get-Date
+        } else {
+            New-Item -ItemType File -Path $p -Force | Out-Null
+        }
+    }
+}
+
+# --- tail ---
+function tail {
+    param(
+        [Parameter(Position=0)][int]$n = 10,
+        [Parameter(ValueFromRemainingArguments=$true)][string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)][string[]]$InputObject,
+        [Alias('f')][switch]$Follow
+    )
+    
+    process {
+        if ($InputObject) {
+            $InputObject | Select-Object -Last $n
+        } elseif ($Path) {
+            if ($Follow) {
+                Get-Content -Path $Path -Tail $n -Wait
+            } else {
+                Get-Content -Path $Path -Tail $n
+            }
+        } else {
+            $input | Select-Object -Last $n
+        }
+    }
+}
+
+# --- grep ---
+function grep {
+    param(
+        [string]$Pattern,
+        [string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)][string[]]$InputObject,
+        [switch]$i, [switch]$v, [switch]$n, [switch]$r
+    )
+    process {
+        $params = @{ Pattern = $Pattern }
+        if ($i) { $params.CaseSensitive = $false }
+        if ($Path) { $params.Path = $Path }
+        if ($r) { $params.Recurse = $true }
+        $result = Select-String @params -InputObject $InputObject
+        if ($v) { $result = $result | Where-Object { -not $_ } }
+        if ($n) { $result | ForEach-Object { "$($_.LineNumber):$($_.Line)" } }
+        else { $result }
+    }
+}
+
+# --- curl fix ---
+# remove PowerShell's curl alias so we get the real curl.exe
+if (Test-Path alias:curl) { Remove-Item alias:curl }
+Set-Alias curl curl.exe
+
+
+# --- System Information ---
+function ps {
+    param([string]$Name = "*")
+    Get-Process -Name $Name | Sort-Object CPU -Descending
+}
+
+
+function top {
+    param([int]$Count = 15)
+    Get-Process | Sort-Object CPU -Descending | Select-Object -First $Count Id, ProcessName, CPU, WorkingSet, VirtualMemorySize
+}
+
+function df {
+    Get-CimInstance -ClassName Win32_LogicalDisk | Select-Object DeviceID, 
+        @{N='Size(GB)';E={[math]::Round($_.Size/1GB,2)}},
+        @{N='Used(GB)';E={[math]::Round(($_.Size-$_.FreeSpace)/1GB,2)}},
+        @{N='Free(GB)';E={[math]::Round($_.FreeSpace/1GB,2)}},
+        @{N='Use%';E={[math]::Round((($_.Size-$_.FreeSpace)/$_.Size)*100,1)}}
+}
+
+function sudo {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Command)
+    
+    if ($Command) {
+        $cmd = $Command -join ' '
+        Start-Process powershell -Verb RunAs -ArgumentList "-NoExit", "-Command", $cmd
+    } else {
+        Start-Process powershell -Verb RunAs
+    }
+}
+
+# --- Useful variables ---
+$env:EDITOR = "notepad"
+
+# --- Enforce utf8 encoding ---
+$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
+$PSDefaultParameterValues['Set-Content:Encoding'] = 'utf8'
+$PSDefaultParameterValues['Add-Content:Encoding'] = 'utf8'
