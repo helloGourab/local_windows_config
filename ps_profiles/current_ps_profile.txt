@@ -142,6 +142,19 @@ function sudo {
     }
 }
 
+function gchm {
+    param([string]$Path)
+    $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+    if ($Path) {
+        # Resolve-Path handles relative paths (like ./index.html) 
+        # and converts them to absolute paths for Chrome
+        $fullPath = Resolve-Path $Path
+        & $chromePath $fullPath
+    } else {
+        & $chromePath
+    }
+}
+
 # --- Useful variables ---
 $env:EDITOR = "notepad"
 
